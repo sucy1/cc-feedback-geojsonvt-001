@@ -3,10 +3,11 @@ import convert from './convert.js'; // GeoJSON conversion and preprocessing
 import clip from './clip.js';       // stripe clipping algorithm
 import wrap from './wrap.js';       // date line processing
 import createTile from './tile.js'; // final simplified tile generation
+import FeatureIndex, {tileToID} from './feature-index.js'; // stable feature→tiles reverse index
 import {POINT, SINGLE_POINT} from './feature.js';
 
-/** @import {AnyFeature, InternalOptions, Tile} from './internal.d.ts' */
-/** @import {Options, LegacyTile, LegacyFeature, RawTile, TileCoord} from './index.d.ts' */
+/** @import {AnyFeature, InternalOptions, Tile, FeatureId} from './internal.d.ts' */
+/** @import {Options, LegacyTile, LegacyFeature, RawTile, TileCoord, FeatureInfo} from './index.d.ts' */
 
 /** @type {Required<Options>} */
 const defaultOptions = {
@@ -44,8 +45,11 @@ export default class GeoJSONVT {
         opts.worldScale = useInt32 ? opts.extent * (1 << opts.maxZoom) : 1;
         opts.originShift = useInt32 ? 0.5 : 0;
 
-        // projects and adds simplification info
-        let features = convert(data, opts);
+        // projects and adds simplification info, and — when source features carry ids — builds the
+        // reverse feature→metadata index (tiles are filled in as splitTile materializes them)
+        /** @type {FeatureIndex} */
+        this.featureIndex = new FeatureIndex();
+        let features = convert(data, opts, this.featureIndex);
 
         // tiles and tileCoords are part of the public API
         /** @type {Record<number, Tile>} */
@@ -98,7 +102,7 @@ export default class GeoJSONVT {
             features = /** @type {AnyFeature[]} */ (featStack.pop());
 
             const z2 = 1 << z;
-            const id = toID(z, x, y);
+            const id = tileToID(z, x, y);
             let tile = this.tiles[id];
 
             if (!tile) {
@@ -108,6 +112,10 @@ export default class GeoJSONVT {
                 this.tileCoords.push({z, x, y});
                 this.stats[z] = (this.stats[z] || 0) + 1;
                 this.total++;
+
+                // reverse index: record which retained features this tile holds. No-op when the data
+                // has no ids, and tiles revisited via splitTile take the `if (!tile)` skip above.
+                this.featureIndex.addTile(tile.features, z, x, y);
 
                 if (debug > 1) {
                     console.log(`tile z${z}-${x}-${y} (features: ${tile.numFeatures}, points: ${tile.numPoints}, simplified: ${tile.numSimplified})`);
@@ -210,7 +218,7 @@ export default class GeoJSONVT {
         const z2 = 1 << z;
         x = (x + z2) & (z2 - 1); // wrap tile x coordinate
 
-        const id = toID(z, x, y);
+        const id = tileToID(z, x, y);
         if (this.tiles[id]) return this.tiles[id];
 
         if (debug > 1) console.log('drilling down to z%d-%d-%d', z, x, y);
@@ -224,7 +232,7 @@ export default class GeoJSONVT {
             z0--;
             x0 = x0 >> 1;
             y0 = y0 >> 1;
-            parent = this.tiles[toID(z0, x0, y0)];
+            parent = this.tiles[tileToID(z0, x0, y0)];
         }
 
         if (!parent || !parent.source) return null;
@@ -238,6 +246,20 @@ export default class GeoJSONVT {
         if (debug > 1) console.timeEnd('drilling down');
 
         return this.tiles[id] ?? null;
+    }
+
+    // Reverse lookup of a source feature by id: GeoJSON type/tags, original lng/lat bbox, and the
+    // ascending {z, x, y} list of every generated tile (drill-downs included) holding a slice of it.
+    // Returns null when no source feature was indexed with that id.
+    /** @param {FeatureId} id @returns {FeatureInfo|null} */
+    getFeature(id) {
+        return this.featureIndex.getFeature(id);
+    }
+
+    // Stable ascending list of indexed ids: numbers first (numeric order), then strings (lexicographic).
+    /** @returns {FeatureId[]} */
+    getFeatureIds() {
+        return this.featureIndex.getFeatureIds();
     }
 }
 
@@ -269,9 +291,4 @@ function flatToPairs(flat) {
     const pairs = [];
     for (let i = 0; i < flat.length; i += 2) pairs.push([flat[i], flat[i + 1]]);
     return pairs;
-}
-
-/** @param {number} z @param {number} x @param {number} y */
-function toID(z, x, y) {
-    return (((1 << z) * y + x) * 32) + z;
 }

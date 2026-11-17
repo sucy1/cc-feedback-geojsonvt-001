@@ -43,7 +43,7 @@
               "coordinates": [100.0, 0.0]
             },
             "properties": {
-              "prop0": 1,
+              "prop0": 3,
               "prop1": {"this": "that"},
               "generatedId": 3
             },

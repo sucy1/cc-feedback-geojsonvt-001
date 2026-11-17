@@ -59,6 +59,34 @@ for (const {type, geometry} of features) {
 
 The arrays belong to the index, so treat them as read-only and don't hold them past its lifetime.
 
+#### Reverse feature lookup
+
+When source features carry an `id` (natively, or via `promoteId` / `generateId`), the index keeps a
+stable reverse map from that id back to the feature and the tiles containing it &mdash; no need to scan
+every tile to find where a feature ended up.
+
+```js
+// all indexed ids, sorted: numbers (numeric order) first, then strings (lexicographic)
+const ids = tileIndex.getFeatureIds(); // [1, 2, 'a', 'b']
+
+// look one feature up
+const info = tileIndex.getFeature(id);
+// {
+//   id,                              // the same id that appears on the tile features
+//   type: 'Point' | 'LineString' | 'Polygon', // GeoJSON geometry name
+//   tags,                            // the feature's properties
+//   bbox: [minX, minY, maxX, maxY],  // in the original GeoJSON longitude/latitude space
+//   tiles: [{z, x, y}, ...]          // ascending; every generated tile holding a slice of the feature
+// }
+tileIndex.getFeature(missingId); // null when no source feature has that id
+```
+
+`tiles` covers tiles created on demand by `getTile` drill-downs as well as the initial build, and never
+counts a tile twice. Numeric `1` and string `'1'` are distinct keys. A duplicate id across two different
+source features throws `duplicate feature id` at construction; `generateId` ids are globally unique
+rather than recounted per tile. Features without an id are simply absent from the index and add no
+overhead to tiling.
+
 ### Options
 
 You can fine-tune the results with an options object,

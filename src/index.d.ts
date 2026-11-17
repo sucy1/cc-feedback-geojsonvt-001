@@ -19,6 +19,17 @@ export interface Options {
 
 export interface TileCoord { z: number; x: number; y: number; }
 
+// Reverse-index lookup of one source feature. `bbox` is [minX, minY, maxX, maxY] in the original
+// GeoJSON longitude/latitude space; `tiles` is the ascending list of generated tiles (drill-downs
+// included) that actually contain a slice of the feature.
+export interface FeatureInfo {
+    id: number | string;
+    type: 'Point' | 'LineString' | 'Polygon';
+    tags: Record<string, unknown> | null;
+    bbox: [number, number, number, number];
+    tiles: TileCoord[];
+}
+
 // Legacy nested envelope returned by getTile(). Coords are extent-scaled ints
 // in tile space. `tags` (not `properties`) matches Supercluster and gl-js's
 // geojson_rt.ts for cross-library envelope consistency.
@@ -64,4 +75,9 @@ export default class GeoJSONVT {
     tileCoords: TileCoord[];
     getTile(z: number | string, x: number | string, y: number | string): LegacyTile | null;
     getTileRaw(z: number | string, x: number | string, y: number | string): RawTile | null;
+    // Reverse lookup: metadata and the tiles containing the feature with `id`, or null when no source
+    // feature carries that id.
+    getFeature(id: number | string): FeatureInfo | null;
+    // Sorted ids known to the reverse index — numbers (numeric order) before strings (lexicographic).
+    getFeatureIds(): Array<number | string>;
 }

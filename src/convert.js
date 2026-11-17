@@ -2,7 +2,7 @@
 import simplify from './simplify.js';
 import {createFeature, createSinglePoint, POINT, LINE, POLYGON, KEEP_Z} from './feature.js';
 
-/** @import {AnyFeature, CoordArray, InternalOptions as Options, Tags, FeatureId as Id} from './internal.d.ts' */
+/** @import {AnyFeature, CoordArray, InternalOptions as Options, Tags, FeatureId as Id, FeatureIndex} from './internal.d.ts' */
 /** @import {Feature, GeoJSON} from 'geojson' */
 
 // Converts a GeoJSON feature into an intermediate projected JSON vector format with simplification data.
@@ -25,25 +25,25 @@ const INVALID_GEOJSON = 'Input data is not a valid GeoJSON object.';
 // the next world copy) at high extent * 2^maxZoom. The feature is then converted again into a Float64Array.
 let overflow = false;
 
-/** @param {GeoJSON} data @param {Options} options @returns {AnyFeature[]} */
-export default function convert(data, options) {
+/** @param {GeoJSON} data @param {Options} options @param {FeatureIndex} [featureIndex] @returns {AnyFeature[]} */
+export default function convert(data, options, featureIndex) {
     /** @type {AnyFeature[]} */
     const features = [];
     if (data.type === 'FeatureCollection') {
         for (let i = 0; i < data.features.length; i++) {
-            convertFeature(features, data.features[i], options, i);
+            convertFeature(features, data.features[i], options, i, featureIndex, i);
         }
     } else if (data.type === 'Feature') {
-        convertFeature(features, data, options);
+        convertFeature(features, data, options, 0, featureIndex, 0);
     } else {
         // bare geometry (incl. GeometryCollection): wrap in a Feature so the recursion sees a uniform shape
-        convertFeature(features, {type: 'Feature', geometry: data, properties: null}, options);
+        convertFeature(features, {type: 'Feature', geometry: data, properties: null}, options, 0, featureIndex, 0);
     }
     return features;
 }
 
-/** @param {AnyFeature[]} features @param {Feature} geojson @param {Options} options @param {number} [index] */
-function convertFeature(features, geojson, options, index) {
+/** @param {AnyFeature[]} features @param {Feature} geojson @param {Options} options @param {number} [index] @param {FeatureIndex} [featureIndex] @param {number} [sourceToken] */
+function convertFeature(features, geojson, options, index, featureIndex, sourceToken = index) {
     const geom = geojson.geometry;
     if (!geom) return;
     // GeometryCollection has `geometries` instead of `coordinates`. Absent either way means malformed
@@ -65,6 +65,12 @@ function convertFeature(features, geojson, options, index) {
     let id = geojson.id;
     if (options.promoteId) id = geojson.properties?.[options.promoteId];
     else if (options.generateId) id = index || 0;
+
+    // Reverse-index registration happens here, once per source feature, while the original GeoJSON
+    // geometry is still available. The same sourceToken makes the Int32-overflow reconversion below
+    // and the GeometryCollection recursion idempotent. The index scans the geometry for its bbox only
+    // when the id is indexable, so anonymous data pays nothing.
+    if (featureIndex) featureIndex.register(id, geom, tags, sourceToken ?? 0);
 
     const start = features.length;
 
@@ -108,7 +114,7 @@ function convertFeature(features, geojson, options, index) {
 
     } else if (geom.type === 'GeometryCollection') {
         for (const g of geom.geometries) {
-            convertFeature(features, {type: 'Feature', id, geometry: g, properties: geojson.properties}, options, index);
+            convertFeature(features, {type: 'Feature', id, geometry: g, properties: geojson.properties}, options, index, featureIndex, sourceToken);
         }
     } else {
         throw new Error(INVALID_GEOJSON);
@@ -118,7 +124,7 @@ function convertFeature(features, geojson, options, index) {
         overflow = false;
         if (CoordArray === Int32Array) {
             features.length = start;
-            convertFeature(features, geojson, Object.assign(Object.create(options), {CoordArray: Float64Array}), index);
+            convertFeature(features, geojson, Object.assign(Object.create(options), {CoordArray: Float64Array}), index, featureIndex, sourceToken);
         }
     }
 }

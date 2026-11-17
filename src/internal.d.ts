@@ -1,6 +1,7 @@
 // Internal types shared across modules. Public types live in index.d.ts.
 
-import type {Options} from './index.d.ts';
+import type {Options, TileCoord, FeatureInfo} from './index.d.ts';
+import type {Geometry} from 'geojson';
 
 // Minimal ambient for console (we don't depend on @types/node and the lib
 // doesn't include DOM, which is the usual source of this global).
@@ -19,6 +20,37 @@ export type TileCoordArrayCtor = Int16ArrayConstructor | Int32ArrayConstructor;
 
 export type Tags = Record<string, unknown> | null | undefined;
 export type FeatureId = number | string;
+
+// Public GeoJSON geometry name carried by a reverse-index entry. Multi* geometries collapse to their
+// singular base type, matching the geometry a source Feature actually names.
+export type GeoJsonType = 'Point' | 'LineString' | 'Polygon';
+
+// One reverse-index row: source-feature metadata plus the packed ids of tiles containing its slices.
+// `sourceToken` identifies the source feature so GeometryCollection recursion and overflow
+// reconversion re-register the same entry instead of tripping the duplicate-id guard.
+export interface FeatureIndexEntry {
+    id: FeatureId;
+    type: GeoJsonType;
+    tags: Tags;
+    // bbox in original GeoJSON lng/lat, held as flat fields to avoid a nested array per source feature
+    minX: number;
+    minY: number;
+    maxX: number;
+    maxY: number;
+    sourceToken: number;
+    tileIDs: number[];
+    sortedTiles: TileCoord[] | null;
+}
+
+// Shape of the FeatureIndex class implemented in feature-index.js.
+export declare class FeatureIndex {
+    entries: Map<FeatureId, FeatureIndexEntry>;
+    active: boolean;
+    register(id: FeatureId | undefined, geom: Geometry, tags: Tags, sourceToken: number): void;
+    addTile(features: TileFeature[], z: number, x: number, y: number): void;
+    getFeature(id: FeatureId): FeatureInfo | null;
+    getFeatureIds(): FeatureId[];
+}
 
 export type InternalOptions = Required<Options> & {
     useInt32: boolean;
